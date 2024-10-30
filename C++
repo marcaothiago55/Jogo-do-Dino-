@@ -1,0 +1,344 @@
+#include <U8glib.h> // Biblioteca para controle de displays OLED
+#include "TM1637Display.h" // Biblioteca para controle do display de 7 segmentos TM1637
+
+#define SW 3 // Pino do botão pulaA
+#define DT 4 // Pino de dados do Encoder Rotativo
+#define CLK 2 // Pino do clock do Encoder Rotativo
+
+#define DCLK 6 // Pino de clock do display TM1637
+#define DIO 5  // Pino de dados do display TM1637
+
+#define buzzer 10 // Pino do buzzer
+
+TM1637Display OurDisplay = TM1637Display(DCLK, DIO); // Criação do objeto para o display TM1637
+
+const uint8_t blank[] = {0x00, 0x00, 0x00, 0x00}; // Array para limpar o display (todos os dígitos apagados)
+U8GLIB_SH1106_128X64  My_u8g_Panel(U8G_I2C_OPT_NONE); // Criação do objeto para o display OLED SH1106, usando I2C
+
+#define jumpSound 700 // Frequência do som para pular
+#define blahSound 125 // Frequência do som para outro efeito
+#define speedSound 1000 // Frequência do som para efeito de velocidade
+#define DBOUNCE 180 // Tempo de debounce para o encoder rotativo (evita múltiplos registros de uma única rotação)
+
+#define gameStart 0 // Status do jogo quando iniciado
+#define gameEnd 1 // Status do jogo quando terminado
+#define gamePlaying 2 // Status do jogo enquanto está em execução
+
+volatile int gameStatus = gameStart; // Variável volátil para o status do jogo, usada em interrupções
+
+// CONSTANTES DE BITMAP PRÉ-SALVAS
+//20 x 21 // Comentário indicando que há bitmaps pré-salvos de 20x21 pixels (não mostrado no código fornecido)
+
+static unsigned char dinoJump [] U8G_PROGMEM = {
+  0x00, 0xFC, 0x07, 0x00, 0xFE, 0x07, 0x00, 0xEE, 0x0F, 0x00, 0xFE, 0x0F,
+  0x00, 0xFE, 0x0F, 0x00, 0xFE, 0x0F, 0x00, 0xFE, 0x07, 0x06, 0xFF, 0x03,
+  0xC3, 0xFF, 0x00, 0xE7, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0x00,
+  0xFF, 0x3F, 0x00, 0xFE, 0x3F, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0x1F, 0x00,
+  0xF0, 0x1F, 0x00, 0xF0, 0x0E, 0x00, 0x60, 0x0E, 0x00, 0xE0, 0x0E, 0x00,
+  0xE0, 0x1E, 0x00,
+};
+//20 x 21
+static unsigned char dinoLeft [] U8G_PROGMEM = {
+  0x00, 0xFC, 0x07, 0x00, 0xFE, 0x07, 0x00, 0xEE, 0x0F, 0x00, 0xFE, 0x0F,
+  0x00, 0xFE, 0x0F, 0x00, 0x7E, 0x08, 0x00, 0x7E, 0x00, 0x06, 0xFF, 0x03,
+  0x87, 0x3F, 0x00, 0xE7, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0x00,
+  0xFF, 0x3F, 0x00, 0xFE, 0x3F, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0x1F, 0x00,
+  0xF0, 0x1F, 0x00, 0xE0, 0x1E, 0x00, 0x60, 0x00, 0x00, 0xE0, 0x00, 0x00,
+  0xE0, 0x00, 0x00,
+};
+//20 x 21
+static unsigned char dinoRight [] U8G_PROGMEM = {
+  0x00, 0xFC, 0x07, 0x00, 0xEE, 0x07, 0x00, 0xE6, 0x0F, 0x00, 0xFE, 0x0F,
+  0x00, 0xFE, 0x0F, 0x00, 0xFE, 0x0F, 0x00, 0x7C, 0x00, 0x06, 0xFF, 0x03,
+  0xC3, 0xFF, 0x00, 0xE7, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0x00,
+  0xFF, 0x3F, 0x00, 0xFE, 0x3F, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0x1F, 0x00,
+  0xF0, 0x1F, 0x00, 0xF0, 0x0F, 0x00, 0xE0, 0x0E, 0x00, 0x00, 0x0E, 0x00,
+  0x00, 0x1E, 0x00,
+};
+//shape 0:  39 x 12
+static unsigned char cloud [] U8G_PROGMEM = {
+  0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0xBE, 0x03, 0x00, 0x00, 0x00,
+  0x03, 0x06, 0x00, 0x00, 0x80, 0x01, 0x04, 0x00, 0x00, 0x40, 0x00, 0x1C,
+  0x00, 0x00, 0x40, 0x00, 0xE4, 0x03, 0x00, 0x18, 0x00, 0x00, 0x02, 0xE0,
+  0x0F, 0x00, 0x00, 0x0E, 0x30, 0x00, 0x00, 0x00, 0x10, 0x10, 0x00, 0x00,
+  0x00, 0x20, 0x12, 0x00, 0x00, 0x00, 0x40, 0x03, 0xFF, 0xFF, 0xFF, 0x7F,
+};
+//shape 1: 10 x 20
+static unsigned char oneCactus [] U8G_PROGMEM = {
+  0x30, 0x00, 0x78, 0x00, 0x78, 0x00, 0x78, 0x00, 0x78, 0x01, 0xFB, 0x03,
+  0xFF, 0x03, 0xFF, 0x03, 0xFF, 0x03, 0xFF, 0x03, 0xFF, 0x03, 0xFF, 0x01,
+  0xFE, 0x00, 0x78, 0x00, 0x78, 0x00, 0x78, 0x00, 0x78, 0x00, 0x78, 0x00,
+  0x78, 0x00, 0x00, 0x00,
+};
+//shape 2: 20 x 20
+static unsigned char twoCactus [] U8G_PROGMEM = {
+  0x30, 0xC0, 0x00, 0x38, 0xE0, 0x00, 0x38, 0xE8, 0x00, 0x38, 0xEC, 0x00,
+  0x38, 0xED, 0x04, 0xBB, 0xED, 0x0E, 0xBB, 0xED, 0x0E, 0xBB, 0xFD, 0x0E,
+  0xBB, 0xFD, 0x0E, 0xBB, 0xF9, 0x0E, 0xFF, 0xF1, 0x0F, 0xFF, 0xE0, 0x07,
+  0x7E, 0xE0, 0x01, 0x38, 0xE0, 0x00, 0x38, 0xE0, 0x00, 0x38, 0xE0, 0x00,
+  0x38, 0xE0, 0x00, 0x38, 0xE0, 0x00, 0x38, 0xE0, 0x00, 0x00, 0x00, 0x00,
+};
+
+//shape 3: 20 x 20
+static unsigned char threeCactus [] U8G_PROGMEM = {
+  0x00, 0xC0, 0x00, 0x18, 0xC0, 0x01, 0x18, 0xC0, 0x01, 0x58, 0xD8, 0x01,
+  0x58, 0xFC, 0x01, 0x58, 0xFC, 0x0F, 0x78, 0xDC, 0x0F, 0x7F, 0xFC, 0x0F,
+  0x3B, 0xFD, 0x0D, 0x1B, 0xF9, 0x0C, 0x5B, 0xF5, 0x0F, 0x5B, 0xC5, 0x07,
+  0x5F, 0xE7, 0x03, 0xDE, 0xE7, 0x01, 0xD8, 0xC3, 0x01, 0x98, 0xC1, 0x01,
+  0x18, 0xC1, 0x01, 0x18, 0xC1, 0x01, 0x18, 0xE1, 0x01, 0x00, 0x00, 0x00,
+};
+//shape 4: 6 x 12
+static unsigned char oneCactusSmall [] U8G_PROGMEM = {
+  0x0C, 0x0C, 0x3C, 0x3D, 0x2D, 0x3D, 0x1D, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C,
+};
+//shape 5: 12 x 12
+static unsigned char twoCactusSmall [] U8G_PROGMEM = {
+  0x0C, 0x03, 0x0C, 0x03, 0x6C, 0x0B, 0x6D, 0x0B, 0x6D, 0x0B, 0xBD, 0x0B,
+  0x1F, 0x0F, 0x0E, 0x03, 0x0C, 0x03, 0x0C, 0x03, 0x0C, 0x03, 0x0C, 0x03,
+};
+//shape 6: 17 x 12
+static unsigned char threeCactusSmall [] U8G_PROGMEM = {
+  0x04, 0x41, 0x00, 0x0C, 0x61, 0x00, 0xFC, 0x79, 0x01, 0xFD, 0x7D, 0x01,
+  0x7D, 0x6D, 0x01, 0x7D, 0x7D, 0x01, 0xCF, 0xE5, 0x01, 0xCE, 0x67, 0x00,
+  0x8C, 0x67, 0x00, 0x0C, 0x63, 0x00, 0x0C, 0x61, 0x00, 0x0C, 0x61, 0x00,
+};
+
+static unsigned char dinoBlah [] U8G_PROGMEM = {
+  0x00, 0xFC, 0x07, 0x00, 0xFE, 0x07, 0x00, 0xC6, 0x0F, 0x00, 0xC6, 0x0F,
+  0x00, 0xCE, 0x0F, 0x00, 0xFE, 0x0F, 0x00, 0xFE, 0x0F, 0x06, 0xFF, 0x03,
+  0x87, 0x7F, 0x00, 0xE7, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0x00,
+  0xFF, 0x3F, 0x00, 0xFE, 0x3F, 0x00, 0xFC, 0x1F, 0x00, 0xF8, 0x1F, 0x00,
+  0xF0, 0x1F, 0x00, 0xF0, 0x0E, 0x00, 0x60, 0x0E, 0x00, 0x60, 0x0E, 0x00,
+  0xE0, 0x1E, 0x00,
+};
+
+static unsigned char gameOver [] U8G_PROGMEM = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0xF8, 0x01, 0x02, 0x0C, 0x0C, 0x3E, 0x00, 0x78, 0x60,
+  0x30, 0x7C, 0xF0, 0x01, 0x0C, 0x01, 0x07, 0x14, 0x0A, 0x02, 0x00, 0x84,
+  0x40, 0x10, 0x04, 0x10, 0x02, 0x04, 0x00, 0x05, 0x14, 0x0A, 0x02, 0x00,
+  0x02, 0x41, 0x10, 0x04, 0x10, 0x02, 0x04, 0x00, 0x05, 0x14, 0x0A, 0x02,
+  0x00, 0x02, 0xC1, 0x18, 0x04, 0x10, 0x02, 0xC4, 0x81, 0x0D, 0x34, 0x0B,
+  0x3E, 0x00, 0x02, 0x81, 0x08, 0x7C, 0xF0, 0x01, 0x04, 0x81, 0x08, 0x24,
+  0x09, 0x02, 0x00, 0x02, 0x81, 0x0D, 0x04, 0x10, 0x01, 0x04, 0x81, 0x0F,
+  0x64, 0x09, 0x02, 0x00, 0x02, 0x01, 0x05, 0x04, 0x10, 0x02, 0x0C, 0xC1,
+  0x18, 0xC4, 0x08, 0x02, 0x00, 0x84, 0x00, 0x05, 0x04, 0x10, 0x02, 0xF8,
+  0x41, 0x10, 0xC4, 0x08, 0x3E, 0x00, 0x78, 0x00, 0x07, 0x7C, 0x10, 0x02,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00,
+};
+
+// variáveis várias
+int currentStateCLK;           // Estado atual do pino CLK do potenciômetro rotativo
+int lastStateCLK;              // Último estado do pino CLK do potenciômetro rotativo
+int MyScore = 0;               // Pontuação atual do jogador
+int dinoMove = 0;              // Movimento do dinossauro
+volatile int jumping = 0;     // Estado de salto do dinossauro (volátil para interrupções)
+int cloudx = 128;             // Posição x da nuvem
+int obstacles [2] = {1, 4};   // Tipos de obstáculos
+int obstaclex [2] = {128, 200}; // Posições x dos obstáculos
+int speed = 8;                // Velocidade do jogo
+unsigned long startTime = millis(), curTime; // Tempo de início e tempo atual
+int lastBeep = 0;            // Último valor de pontuação que acionou o som
+
+// Função para exibir a pontuação no display de 7 segmentos
+void ShowScore () {
+  if (gameStatus == gamePlaying) { // Verifica se o jogo está em execução
+    curTime = millis ();           // Atualiza o tempo atual
+    MyScore = (curTime - startTime) * speed / 1000; // Calcula a pontuação
+    OurDisplay.showNumberDecEx(MyScore); // Mostra a pontuação no display
+    if (MyScore / 100 > lastBeep) { // Verifica se a pontuação atingiu um múltiplo de 100
+      tone (buzzer, 1000, 100);  // Emite um som de 1000Hz por 100ms
+      delay (150);               // Aguarda 150ms
+      tone (buzzer, 1250, 100);  // Emite um som de 1250Hz por 100ms
+      lastBeep = MyScore / 100;  // Atualiza o último valor de pontuação que acionou o som
+    }
+  }
+}
+
+// Função para iniciar ou parar o jogo
+void StartStopGame () {
+  static unsigned long last_interrupt = 0; // Armazena o tempo do último interrupt
+  if (millis() - last_interrupt > DBOUNCE) { // Verifica o debounce para evitar múltiplas interrupções
+    if (gameStatus == gamePlaying) {  // Se o jogo está em execução
+      if (jumping == 0) {             // Se o dinossauro não está pulando
+        jumping = 1;                 // Inicia o salto
+        tone (buzzer, jumpSound, 100); // Emite um som de salto
+      }
+    }
+    else if (gameStatus == gameStart) gameStatus = gamePlaying; // Se o jogo está em início, começa o jogo
+    else gameStatus = gameStart; // Caso contrário, reinicia o jogo
+  }
+  last_interrupt = millis(); // Atualiza o tempo do último interrupt
+}
+
+// Função para redefinir o jogo
+void resetGame () {
+  MyScore = 0;                // Reseta a pontuação
+  startTime = millis();       // Atualiza o tempo de início
+  obstaclex[0] = 128;         // Redefine a posição dos obstáculos
+  obstaclex [1] = 200;
+  dinoMove = 0;               // Redefine o movimento do dinossauro
+}
+
+// Configuração inicial
+void setup() {
+  OurDisplay.setBrightness(7);  // Configura o brilho do display
+  OurDisplay.clear();           // Limpa o display
+  resetGame();                  // Reseta o jogo
+  ShowScore ();                 // Mostra a pontuação inicial
+  pinMode(CLK, INPUT);          // Define o pino CLK como entrada
+  pinMode(DT, INPUT);           // Define o pino DT como entrada
+  pinMode(SW, INPUT_PULLUP);    // Define o pino SW com resistência de pull-up
+  pinMode(buzzer, OUTPUT);      // Define o pino do buzzer como saída
+  attachInterrupt(digitalPinToInterrupt(SW), StartStopGame, FALLING); // Configura interrupção para o botão
+}
+
+// Função principal do loop
+void loop(void) {
+  ShowScore();                  // Atualiza a pontuação
+  My_u8g_Panel.firstPage();     // Começa a nova página de exibição
+  do {
+    draw();                     // Desenha a cena
+  } while ( My_u8g_Panel.nextPage() ); // Continua para a próxima página
+  if (gameStatus == gamePlaying) { // Se o jogo está em execução
+    moveDino();                 // Move o dinossauro
+    moveCloud();                // Move a nuvem
+    moveObstacles();            // Move os obstáculos
+  }
+}
+
+// Função para mover o dinossauro
+void moveDino () {
+  if (jumping == 0) dinoMove = (dinoMove + 2) % 3; // Muda o movimento mais rapidamente se não está pulando
+  else {
+    if (jumping == 1) {          // Se o dinossauro está subindo
+      dinoMove = dinoMove + 12;  // Aumenta a posição do movimento para maior altura
+      if (dinoMove > 48) jumping = 2; // Alcança um ponto mais alto para a descida
+    } else {                     // Se o dinossauro está descendo
+      dinoMove = dinoMove - 10;  // Diminui a posição do movimento para maior distância
+      if (dinoMove < 12) {       // Ajusta a posição inicial para a descida
+        jumping = 0;            // Finaliza o salto
+        dinoMove = 0;           // Reseta a posição do movimento
+      }
+    }
+  }
+  checkCollision ();            // Verifica colisões
+}
+
+// Função para mover a nuvem
+void moveCloud () {
+  cloudx --;                    // Move a nuvem para a esquerda
+  if (cloudx < -38) cloudx = 128; // Se a nuvem sai da tela, redefine a posição
+}
+
+// Função para mover os obstáculos
+void moveObstacles() {
+  int obx = obstaclex [0];      // Pega a posição x do primeiro obstáculo
+  obx = obx - speed;            // Move o obstáculo para a esquerda
+  if (obx < -20) {              // Se o obstáculo saiu da tela
+    obstaclex[0] = obstaclex[1]; // Move o segundo obstáculo para a posição do primeiro
+    obstaclex[1] = obstaclex[0] + random(80, 125); // Define uma nova posição para o segundo obstáculo
+    obstacles[0] = obstacles[1]; // Move o tipo do segundo obstáculo para o primeiro
+    obstacles[1] = random (1, 6); // Define um novo tipo de obstáculo
+  }
+  else {
+    obstaclex[0] = obx;         // Atualiza a posição do primeiro obstáculo
+    obstaclex[1] -= speed;     // Move o segundo obstáculo para a esquerda
+  }
+}
+
+// Função para desenhar a tela
+void draw(void) {
+  u8g_prepare();                // Prepara o display
+  if (gameStatus == gamePlaying) { // Se o jogo está em execução
+    drawDino ();                // Desenha o dinossauro
+    drawShape (0, cloudx);      // Desenha a nuvem
+    drawObsticles ();           // Desenha os obstáculos
+  }
+  else if (gameStatus == gameStart) { // Se o jogo está em início
+    My_u8g_Panel.drawStr( 0, 10, "Jogo do Dino"); // Exibe mensagem de boas-vindas
+    My_u8g_Panel.drawStr( 10, 30, "Prof Thiago");
+    My_u8g_Panel.drawStr( 0, 50, "15/19/2024"); // Instrução para começar
+    resetGame();              // Reseta o jogo
+    ShowScore();             // Mostra a pontuação
+  }
+  else { // Caso contrário, se o jogo acabou
+    My_u8g_Panel.drawXBMP( 14, 12, 100, 15, gameOver); // Desenha a tela de "Game Over"
+    drawDino ();            // Desenha o dinossauro
+    drawShape (0, cloudx);  // Desenha a nuvem
+    drawObsticles ();       // Desenha os obstáculos
+  }
+}
+
+// Função para desenhar o dinossauro
+void drawDino (void) {
+  if (gameStatus == gameEnd) { // Se o jogo acabou
+    My_u8g_Panel.drawXBMP( 0, 43 - dinoMove, 20, 21, dinoBlah); // Desenha o dinossauro em estado final
+    return;
+  }
+  switch (dinoMove) {           // Baseado no movimento do dinossauro
+    case -1: My_u8g_Panel.drawXBMP( 0, 43, 20, 21, dinoBlah); break; // Estado de descanso
+    case 0: My_u8g_Panel.drawXBMP( 0, 43, 20, 21, dinoJump); break;  // Estado de salto
+    case 1: My_u8g_Panel.drawXBMP( 0, 43, 20, 21, dinoLeft); break;  // Estado de movimento para a esquerda
+    case 2: My_u8g_Panel.drawXBMP( 0, 43, 20, 21, dinoRight); break; // Estado de movimento para a direita
+    default: My_u8g_Panel.drawXBMP( 0, 43 - dinoMove, 20, 21, dinoJump); break; // Estado de salto padrão
+  }
+}
+
+// Função para desenhar formas no display
+void drawShape (int shape, int x) {
+  switch (shape) {
+    case 0: My_u8g_Panel.drawXBMP( x, 5, 39, 12, cloud); break; // Nuvem
+    case 1: My_u8g_Panel.drawXBMP( x, 44, 10, 20, oneCactus); break; // Cacto pequeno
+    case 2: My_u8g_Panel.drawXBMP( x, 44, 20, 20, twoCactus); break; // Cacto médio
+    case 3: My_u8g_Panel.drawXBMP( x, 44, 20, 20, threeCactus); break; // Cacto grande
+    case 4: My_u8g_Panel.drawXBMP( x, 52, 6, 12, oneCactusSmall); break; // Cacto pequeno pequeno
+    case 5: My_u8g_Panel.drawXBMP( x, 52, 12, 12, twoCactusSmall); break; // Cacto médio pequeno
+    case 6: My_u8g_Panel.drawXBMP( x, 52, 17, 12, threeCactusSmall); break; // Cacto grande pequeno
+  }
+}
+
+// Função para verificar colisões
+void checkCollision () {
+  int obx = obstaclex [0];    // Posição x do primeiro obstáculo
+  int obw, obh;              // Largura e altura do obstáculo
+
+  // Define a largura e altura com base no tipo de obstáculo
+  switch (obstacles[0]) {
+    case 0: obw =  39; obh = 10; break;
+    case 1: obw = 10; obh = 20; break;
+    case 2: obw = 17; obh = 20; break;
+    case 3: obw = 17; obh = 20; break;
+    case 4: obw = 6; obh = 12; break;
+    case 5: obw = 12; obh = 12; break;
+    case 6: obw = 17; obh = 12; break;
+  }
+  if (obx > 15 || obx + obw < 5 || dinoMove > obh - 3) {
+    // Não há colisão
+  }
+  else { // Se há colisão
+    gameStatus = gameEnd;    // Define o status do jogo como terminado
+    tone (buzzer, 125, 100); // Emite um som de 125Hz por 100ms
+    delay(150);             // Aguarda 150ms
+    tone (buzzer, 125, 100); // Emite um som de 125Hz por 100ms
+  }
+}
+
+// Função para desenhar obstáculos
+void drawObsticles () {
+  drawShape (obstacles[0], obstaclex[0]); // Desenha o primeiro obstáculo
+  drawShape (obstacles[1], obstaclex[1]); // Desenha o segundo obstáculo
+}
+
+// Função para preparar o display
+void u8g_prepare(void) {
+  My_u8g_Panel.setFont(u8g_font_6x10); // Define a fonte
+  My_u8g_Panel.setFontRefHeightExtendedText(); // Define altura de referência da fonte
+  My_u8g_Panel.setDefaultForegroundColor(); // Define a cor de primeiro plano padrão
+  My_u8g_Panel.setFontPosTop(); // Define a posição da fonte no topo
+}
